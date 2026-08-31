@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Calorie Tracker</title>
+<meta name="description" content="Personal calorie, macro, weight and supplement tracker">
+<meta name="theme-color" content="#0b1220">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Calories">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <h1 id="topbar-title">Today</h1>
+    <div class="date-nav" id="date-nav">
+      <button id="date-prev" aria-label="Previous day">‹</button>
+      <button id="date-label" aria-label="Pick a date">Today</button>
+      <button id="date-next" aria-label="Next day">›</button>
+    </div>
+  </div>
+</header>
+
+<main id="app">
+
+  <div class="install-banner hidden" id="install-banner">
+    <span>Install this app on your home screen for the full experience.</span>
+    <button id="install-btn">Install</button>
+    <button id="install-dismiss" aria-label="Dismiss">×</button>
+  </div>
+
+  <!-- TODAY -->
+  <section class="tab-panel" id="tab-today" data-tab="today">
+    <div class="card summary-card">
+      <div class="ring-wrap">
+        <svg viewBox="0 0 120 120" class="ring">
+          <circle cx="60" cy="60" r="52" class="ring-track"></circle>
+          <circle cx="60" cy="60" r="52" class="ring-progress" id="calorie-ring"></circle>
+        </svg>
+        <div class="ring-center">
+          <span id="calories-remaining">0</span>
+          <small>kcal left</small>
+        </div>
+      </div>
+      <div class="summary-stats">
+        <div class="stat"><span id="calories-consumed">0</span><small>eaten</small></div>
+        <div class="stat"><span id="calories-goal">0</span><small>goal</small></div>
+        <div class="stat" id="calories-over-wrap"><span id="calories-over">0</span><small>over</small></div>
+      </div>
+    </div>
+
+    <div class="card macro-card">
+      <div class="macro-row" data-macro="protein">
+        <div class="macro-label"><span>Protein</span><span class="macro-nums"><b id="protein-consumed">0</b>/<span id="protein-goal">0</span>g</span></div>
+        <div class="bar-track"><div class="bar-fill" id="protein-bar"></div></div>
+      </div>
+      <div class="macro-row" data-macro="carbs">
+        <div class="macro-label"><span>Carbs</span><span class="macro-nums"><b id="carbs-consumed">0</b>/<span id="carbs-goal">0</span>g</span></div>
+        <div class="bar-track"><div class="bar-fill" id="carbs-bar"></div></div>
+      </div>
+      <div class="macro-row" data-macro="fat">
+        <div class="macro-label"><span>Fat</span><span class="macro-nums"><b id="fat-consumed">0</b>/<span id="fat-goal">0</span>g</span></div>
+        <div class="bar-track"><div class="bar-fill" id="fat-bar"></div></div>
+      </div>
+    </div>
+
+    <div class="section-header">
+      <h2>Meals</h2>
+      <button class="btn-add" id="add-food-btn">+ Add food</button>
+    </div>
+    <div id="meal-list" class="entry-list"></div>
+
+    <div class="section-header">
+      <h2>Supplements</h2>
+      <button class="btn-add" id="add-supp-btn">+ Log</button>
+    </div>
+    <div id="supp-list" class="entry-list"></div>
+  </section>
+
+  <!-- FOODS -->
+  <section class="tab-panel hidden" id="tab-foods" data-tab="foods">
+    <div class="search-bar">
+      <input type="search" id="food-search-input" placeholder="Search Open Food Facts or your library…">
+      <button id="food-search-btn">Search</button>
+    </div>
+    <button class="btn-secondary full-width" id="new-manual-food-btn">+ Create manual food</button>
+    <div id="food-search-status" class="muted"></div>
+    <div id="food-search-results" class="entry-list"></div>
+    <h2 class="list-heading">Your food library</h2>
+    <div id="food-library-list" class="entry-list"></div>
+  </section>
+
+  <!-- SUPPLEMENTS -->
+  <section class="tab-panel hidden" id="tab-supps" data-tab="supps">
+    <button class="btn-secondary full-width" id="new-supp-btn">+ New supplement</button>
+    <h2 class="list-heading">Your supplement library</h2>
+    <div id="supp-library-list" class="entry-list"></div>
+  </section>
+
+  <!-- HISTORY -->
+  <section class="tab-panel hidden" id="tab-history" data-tab="history">
+    <div class="card">
+      <h2 class="chart-title">Calories — last 14 days</h2>
+      <canvas id="calorie-chart" height="180"></canvas>
+    </div>
+    <div class="card">
+      <div class="section-header no-gap">
+        <h2 class="chart-title">Weight</h2>
+        <button class="btn-add" id="add-weight-btn">+ Log weight</button>
+      </div>
+      <canvas id="weight-chart" height="180"></canvas>
+    </div>
+    <h2 class="list-heading">Past days</h2>
+    <div id="history-list" class="entry-list"></div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="tab-panel hidden" id="tab-settings" data-tab="settings">
+    <div class="card">
+      <h2 class="chart-title">Daily goals</h2>
+      <label class="field">Calories (kcal)<input type="number" id="goal-calories" min="0" step="10"></label>
+      <label class="field">Protein (g)<input type="number" id="goal-protein" min="0" step="1"></label>
+      <label class="field">Carbs (g)<input type="number" id="goal-carbs" min="0" step="1"></label>
+      <label class="field">Fat (g)<input type="number" id="goal-fat" min="0" step="1"></label>
+      <button class="btn-primary full-width" id="save-goals-btn">Save goals</button>
+    </div>
+    <div class="card">
+      <h2 class="chart-title">Your data</h2>
+      <p class="muted">Everything is stored only on this device. Back up regularly, especially before clearing browser data.</p>
+      <button class="btn-secondary full-width" id="export-btn">Export backup (.json)</button>
+      <label class="btn-secondary full-width file-btn">Import backup (.json)
+        <input type="file" id="import-input" accept="application/json" hidden>
+      </label>
+      <button class="btn-danger full-width" id="clear-btn">Erase all data</button>
+    </div>
+    <div class="card">
+      <h2 class="chart-title">About</h2>
+      <p class="muted">Calorie Tracker — a private, offline-first PWA. No accounts, no ads, no tracking. Food lookup uses the free <a href="https://world.openfoodfacts.org" target="_blank" rel="noopener">Open Food Facts</a> database.</p>
+    </div>
+  </section>
+
+</main>
+
+<nav class="tabbar">
+  <button class="tab-btn active" data-tab="today">
+    <svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2zm1 5v5.41l4.29 4.3-1.41 1.41L11 13V7h2z"/></svg>
+    <span>Today</span>
+  </button>
+  <button class="tab-btn" data-tab="foods">
+    <svg viewBox="0 0 24 24"><path d="M11 9H9V2H7v7H5V2H3v7c0 2.12 1.66 3.84 3.75 3.97V22h2.5v-9.03C11.34 12.84 13 11.12 13 9V2h-2v7zm5-3v8h2.5v8H21V2c-2.76 0-5 2.24-5 4z"/></svg>
+    <span>Foods</span>
+  </button>
+  <button class="tab-btn" data-tab="supps">
+    <svg viewBox="0 0 24 24"><path d="M4.22 11.29l7.07-7.07a5 5 0 1 1 7.07 7.07l-7.07 7.07a5 5 0 0 1-7.07-7.07zm1.41 1.41a3 3 0 0 0 4.24 4.24l2.83-2.83-4.24-4.24-2.83 2.83zM11.29 4.22a3 3 0 0 0 0 4.24l1.42 1.41 4.24-4.24-1.42-1.41a3 3 0 0 0-4.24 0z"/></svg>
+    <span>Supps</span>
+  </button>
+  <button class="tab-btn" data-tab="history">
+    <svg viewBox="0 0 24 24"><path d="M3 3h2v18H3V3zm4 10h2v8H7v-8zm4-6h2v14h-2V7zm4 3h2v11h-2V10zm4-7h2v18h-2V3z"/></svg>
+    <span>History</span>
+  </button>
+  <button class="tab-btn" data-tab="settings">
+    <svg viewBox="0 0 24 24"><path d="M19.14 12.94a7.07 7.07 0 0 0 .05-.94 7.07 7.07 0 0 0-.05-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7.3 7.3 0 0 0-1.63-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.7 8.84a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88L2.82 14.5a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.4.32.6.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54c.05.24.26.42.5.42h3.84c.24 0 .45-.18.5-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96c.24.1.5 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.56zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>
+    <span>Settings</span>
+  </button>
+</nav>
+
+<div class="sheet-backdrop hidden" id="sheet-backdrop"></div>
+<div class="sheet hidden" id="sheet">
+  <div class="sheet-handle"></div>
+  <div id="sheet-content"></div>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
