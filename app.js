@@ -158,12 +158,14 @@
   const sheetContent = document.getElementById('sheet-content');
 
   function openSheet(html) {
+    stopActiveCamera(); // in case a barcode scan was left running under a previous sheet
     sheetContent.innerHTML = html;
     sheetEl.classList.remove('hidden');
     sheetBackdrop.classList.remove('hidden');
   }
 
   function closeSheet() {
+    stopActiveCamera();
     sheetEl.classList.add('hidden');
     sheetBackdrop.classList.add('hidden');
     sheetContent.innerHTML = '';
@@ -461,7 +463,7 @@
     }
   }
 
-  document.getElementById('new-manual-food-btn').addEventListener('click', () => {
+  function openManualFoodSheet(prefillBarcode) {
     openSheet(`
       <h3>Create manual food</h3>
       <label class="field">Name<input type="text" id="mf-name" placeholder="e.g. Grilled chicken breast"></label>
@@ -474,6 +476,7 @@
         <label class="field">Carbs (g)<input type="number" id="mf-carbs" min="0" step="0.1"></label>
         <label class="field">Fat (g)<input type="number" id="mf-fat" min="0" step="0.1"></label>
       </div>
+      ${prefillBarcode ? `<p class="muted">Barcode ${escapeHtml(prefillBarcode)} — not found in Open Food Facts, will be saved with this entry.</p>` : ''}
       <button class="btn-primary full-width" id="mf-save">Save food</button>
     `);
     document.getElementById('mf-save').addEventListener('click', () => {
@@ -489,74 +492,104 @@
         fat: parseFloat(document.getElementById('mf-fat').value) || 0,
         source: 'manual',
       };
+      if (prefillBarcode) food.barcode = prefillBarcode;
       db.foods.push(food);
       saveDb();
       closeSheet();
       renderFoods();
       toast('Saved ' + name);
     });
-  });
+  }
+  document.getElementById('new-manual-food-btn').addEventListener('click', () => openManualFoodSheet());
+
+  const RO_TAG = 'en:romania';
+  function isRomaniaProduct(p) {
+    return Array.isArray(p.countries_tags) && p.countries_tags.indexOf(RO_TAG) !== -1;
+  }
+  function offSearchUrl(query, extraParams) {
+    return 'https://world.openfoodfacts.org/cgi/search.pl?search_terms=' + encodeURIComponent(query)
+      + '&search_simple=1&action=process&json=1&page_size=24' + (extraParams || '');
+  }
+  function fetchOffSearch(url) {
+    return fetch(url).then((res) => {
+      if (!res.ok) throw new Error('bad response');
+      return res.json();
+    }).then((data) => (data.products || []).filter((p) => {
+      const n = p.nutriments || {};
+      return p.product_name && (n['energy-kcal_100g'] != null || n['energy-kcal_serving'] != null);
+    }));
+  }
 
   function searchFoodDb(query) {
     const statusEl = document.getElementById('food-search-status');
     const resultsEl = document.getElementById('food-search-results');
     statusEl.textContent = 'Searching…';
     resultsEl.innerHTML = '';
-    const url = 'https://world.openfoodfacts.org/cgi/search.pl?search_terms=' +
-      encodeURIComponent(query) + '&search_simple=1&action=process&json=1&page_size=20';
-    fetch(url).then((res) => {
-      if (!res.ok) throw new Error('bad response');
-      return res.json();
-    }).then((data) => {
-      const products = (data.products || []).filter((p) => {
-        const n = p.nutriments || {};
-        return p.product_name && (n['energy-kcal_100g'] != null || n['energy-kcal_serving'] != null);
-      });
-      if (products.length === 0) {
-        statusEl.textContent = 'No results found.';
-        return;
-      }
-      statusEl.textContent = products.length + ' result(s) — tap + to save to your library';
-      resultsEl.innerHTML = products.slice(0, 20).map((p, idx) => {
-        const n = p.nutriments || {};
-        const kcal = round(n['energy-kcal_100g'] || 0);
-        const protein = round(n['proteins_100g'] || 0, 1);
-        const carbs = round(n['carbohydrates_100g'] || 0, 1);
-        const fat = round(n['fat_100g'] || 0, 1);
-        const brand = p.brands ? ' · ' + p.brands.split(',')[0] : '';
-        return `
-          <div class="quick-add-item">
-            <div class="qa-main">
-              <div class="qa-title">${escapeHtml(p.product_name)}${escapeHtml(brand)}</div>
-              <div class="qa-sub">${kcal} kcal · P${protein} C${carbs} F${fat} per 100g</div>
-            </div>
-            <button data-off-idx="${idx}">+</button>
-          </div>`;
-      }).join('');
-      resultsEl.querySelectorAll('[data-off-idx]').forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const p = products[btn.dataset.offIdx];
+
+    // First try scoped to products tagged as sold in Romania; if that comes up empty
+    // (Open Food Facts' Romanian coverage is patchy for some items), fall back to a
+    // global search and just sort/badge the Romania-tagged ones to the top instead.
+    const roUrl = offSearchUrl(query, '&tagtype_0=countries&tag_contains_0=contains&tag_0=romania');
+    fetchOffSearch(roUrl)
+      .catch(() => [])
+      .then((roProducts) => {
+        if (roProducts.length > 0) return { products: roProducts, scoped: true };
+        return fetchOffSearch(offSearchUrl(query)).then((products) => ({ products, scoped: false }));
+      })
+      .then(({ products, scoped }) => {
+        if (products.length === 0) {
+          statusEl.textContent = 'No results found.';
+          return;
+        }
+        if (!scoped) {
+          products = products.slice().sort((a, b) => (isRomaniaProduct(b) ? 1 : 0) - (isRomaniaProduct(a) ? 1 : 0));
+        }
+        statusEl.textContent = products.length + ' result(s)'
+          + (scoped ? ' available in Romania' : ' — 🇷🇴 marks ones tagged as sold in Romania')
+          + ' — tap + to save to your library';
+        resultsEl.innerHTML = products.slice(0, 24).map((p, idx) => {
           const n = p.nutriments || {};
-          const food = {
-            id: uid(),
-            name: p.product_name + (p.brands ? ' (' + p.brands.split(',')[0] + ')' : ''),
-            servingLabel: '100 g',
-            calories: round(n['energy-kcal_100g'] || 0),
-            protein: round(n['proteins_100g'] || 0, 1),
-            carbs: round(n['carbohydrates_100g'] || 0, 1),
-            fat: round(n['fat_100g'] || 0, 1),
-            source: 'openfoodfacts',
-            barcode: p.code || null,
-          };
-          db.foods.push(food);
-          saveDb();
-          toast('Saved to library');
-          renderFoods();
+          const kcal = round(n['energy-kcal_100g'] || 0);
+          const protein = round(n['proteins_100g'] || 0, 1);
+          const carbs = round(n['carbohydrates_100g'] || 0, 1);
+          const fat = round(n['fat_100g'] || 0, 1);
+          const brand = p.brands ? ' · ' + p.brands.split(',')[0] : '';
+          const roBadge = isRomaniaProduct(p) ? ' 🇷🇴' : '';
+          return `
+            <div class="quick-add-item">
+              <div class="qa-main">
+                <div class="qa-title">${escapeHtml(p.product_name)}${escapeHtml(brand)}${roBadge}</div>
+                <div class="qa-sub">${kcal} kcal · P${protein} C${carbs} F${fat} per 100g</div>
+              </div>
+              <button data-off-idx="${idx}">+</button>
+            </div>`;
+        }).join('');
+        resultsEl.querySelectorAll('[data-off-idx]').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            const p = products[btn.dataset.offIdx];
+            const n = p.nutriments || {};
+            const food = {
+              id: uid(),
+              name: p.product_name + (p.brands ? ' (' + p.brands.split(',')[0] + ')' : ''),
+              servingLabel: '100 g',
+              calories: round(n['energy-kcal_100g'] || 0),
+              protein: round(n['proteins_100g'] || 0, 1),
+              carbs: round(n['carbohydrates_100g'] || 0, 1),
+              fat: round(n['fat_100g'] || 0, 1),
+              source: 'openfoodfacts',
+              barcode: p.code || null,
+            };
+            db.foods.push(food);
+            saveDb();
+            toast('Saved to library');
+            renderFoods();
+          });
         });
+      })
+      .catch((e) => {
+        console.error('searchFoodDb error', e);
+        statusEl.textContent = 'Search failed — check your internet connection.';
       });
-    }).catch(() => {
-      statusEl.textContent = 'Search failed — check your internet connection.';
-    });
   }
 
   document.getElementById('food-search-btn').addEventListener('click', () => {
@@ -569,6 +602,190 @@
       if (q) searchFoodDb(q);
     }
   });
+
+  /* ---------------------------------------------------------------------
+   * BARCODE SCANNER
+   * Uses the native BarcodeDetector API against a live camera feed, with a
+   * manual-entry fallback when that API (or camera access) isn't available.
+   * ------------------------------------------------------------------- */
+  let activeCameraStream = null;
+  let scanning = false;
+  let scanTimeoutId = null;
+
+  function stopActiveCamera() {
+    scanning = false;
+    if (scanTimeoutId) { clearTimeout(scanTimeoutId); scanTimeoutId = null; }
+    if (activeCameraStream) {
+      activeCameraStream.getTracks().forEach((t) => t.stop());
+      activeCameraStream = null;
+    }
+  }
+
+  function renderManualBarcodeEntry(message) {
+    const area = document.getElementById('scanner-area') || sheetContent;
+    area.innerHTML = `
+      ${message ? `<div class="empty-msg">${escapeHtml(message)}</div>` : ''}
+      <label class="field">Barcode number<input type="text" inputmode="numeric" id="manual-barcode-input" placeholder="e.g. 5941234567890"></label>
+      <button class="btn-primary full-width" id="manual-barcode-lookup">Look up</button>
+    `;
+    document.getElementById('manual-barcode-lookup').addEventListener('click', () => {
+      const val = document.getElementById('manual-barcode-input').value.trim();
+      if (!val) { toast('Enter a barcode number'); return; }
+      lookupBarcodeAndShow(val);
+    });
+  }
+
+  async function openBarcodeScanner() {
+    openSheet(`
+      <h3>Scan barcode</h3>
+      <div id="scanner-area"></div>
+      <button class="btn-secondary full-width" id="manual-barcode-toggle" style="margin-top:10px;">Enter barcode manually instead</button>
+    `);
+    document.getElementById('manual-barcode-toggle').addEventListener('click', () => {
+      stopActiveCamera();
+      renderManualBarcodeEntry();
+    });
+
+    if (!('BarcodeDetector' in window)) {
+      renderManualBarcodeEntry("Barcode scanning isn't supported in this browser — enter the number instead.");
+      return;
+    }
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
+    } catch (err) {
+      renderManualBarcodeEntry("Couldn't access your camera — enter the barcode number instead.");
+      return;
+    }
+    // The sheet may have been closed while we were waiting on the permission prompt.
+    const area = document.getElementById('scanner-area');
+    if (!area) { stream.getTracks().forEach((t) => t.stop()); return; }
+    activeCameraStream = stream;
+
+    area.innerHTML = `
+      <div class="scanner-video-wrap">
+        <video id="scanner-video" autoplay playsinline muted></video>
+        <div class="scanner-frame"></div>
+      </div>
+      <div class="ai-spinner-row"><span class="spinner"></span> Point your camera at the barcode…</div>
+    `;
+    const video = document.getElementById('scanner-video');
+    video.srcObject = stream;
+    try { await video.play(); } catch (e) { /* autoplay quirks — ignore */ }
+
+    let detector;
+    try {
+      detector = new BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128'] });
+    } catch (e) {
+      stopActiveCamera();
+      renderManualBarcodeEntry("Barcode scanning isn't available on this device — enter the number instead.");
+      return;
+    }
+
+    scanning = true;
+    const tick = async () => {
+      if (!scanning) return;
+      const videoEl = document.getElementById('scanner-video');
+      if (!videoEl) { scanning = false; return; }
+      try {
+        const codes = await detector.detect(videoEl);
+        if (scanning && codes && codes.length > 0) {
+          scanning = false;
+          const value = codes[0].rawValue;
+          stopActiveCamera();
+          lookupBarcodeAndShow(value);
+          return;
+        }
+      } catch (e) { /* transient decode error — keep trying */ }
+      if (scanning) scanTimeoutId = setTimeout(tick, 350);
+    };
+    tick();
+  }
+
+  async function lookupBarcodeAndShow(barcode) {
+    sheetContent.innerHTML = `<h3>Scan barcode</h3><div class="ai-spinner-row"><span class="spinner"></span> Looking up ${escapeHtml(barcode)}…</div>`;
+    let product;
+    try {
+      const res = await fetch('https://world.openfoodfacts.org/api/v2/product/' + encodeURIComponent(barcode) + '.json');
+      if (!res.ok) throw new Error('lookup failed');
+      const data = await res.json();
+      if (!data || data.status !== 1 || !data.product) {
+        renderBarcodeNotFound(barcode);
+        return;
+      }
+      product = data.product;
+    } catch (e) {
+      sheetContent.innerHTML = `
+        <h3>Scan barcode</h3>
+        <div class="empty-msg">Couldn't look that up — check your internet connection.</div>
+        <button class="btn-secondary full-width" id="barcode-retry-btn">Try again</button>
+      `;
+      document.getElementById('barcode-retry-btn').addEventListener('click', () => lookupBarcodeAndShow(barcode));
+      return;
+    }
+    renderBarcodeProduct(product, barcode);
+  }
+
+  function renderBarcodeNotFound(barcode) {
+    sheetContent.innerHTML = `
+      <h3>Scan barcode</h3>
+      <div class="empty-msg">No product found for barcode ${escapeHtml(barcode)} in Open Food Facts. You can still add it to your library by hand.</div>
+      <button class="btn-primary full-width" id="barcode-manual-food-btn">Create manual food</button>
+    `;
+    document.getElementById('barcode-manual-food-btn').addEventListener('click', () => openManualFoodSheet(barcode));
+  }
+
+  function renderBarcodeProduct(product, barcode) {
+    const n = product.nutriments || {};
+    const kcal = round(n['energy-kcal_100g'] || 0);
+    const protein = round(n['proteins_100g'] || 0, 1);
+    const carbs = round(n['carbohydrates_100g'] || 0, 1);
+    const fat = round(n['fat_100g'] || 0, 1);
+    const name = (product.product_name || 'Unnamed product') + (product.brands ? ' (' + product.brands.split(',')[0] + ')' : '');
+    const roBadge = isRomaniaProduct(product) ? ' 🇷🇴' : '';
+    sheetContent.innerHTML = `
+      <h3>Product found</h3>
+      <div class="quick-add-item" style="margin-bottom:14px;">
+        <div class="qa-main">
+          <div class="qa-title">${escapeHtml(name)}${roBadge}</div>
+          <div class="qa-sub">${kcal} kcal · P${protein} C${carbs} F${fat} per 100g</div>
+        </div>
+      </div>
+      <label class="field">Grams eaten<input type="number" id="barcode-grams" min="1" step="1" value="100"></label>
+      <button class="btn-primary full-width" id="barcode-save-btn">Save to library &amp; add to today</button>
+      <button class="btn-secondary full-width" id="barcode-save-only-btn">Just save to library</button>
+    `;
+    function buildFood() {
+      return { id: uid(), name, servingLabel: '100 g', calories: kcal, protein, carbs, fat, source: 'openfoodfacts', barcode: product.code || barcode };
+    }
+    document.getElementById('barcode-save-only-btn').addEventListener('click', () => {
+      db.foods.push(buildFood());
+      saveDb();
+      closeSheet();
+      if (state.activeTab === 'foods') renderFoods();
+      toast('Saved to library');
+    });
+    document.getElementById('barcode-save-btn').addEventListener('click', () => {
+      const grams = parseFloat(document.getElementById('barcode-grams').value) || 100;
+      const ratio = grams / 100;
+      const food = buildFood();
+      db.foods.push(food);
+      const l = getLog(state.currentDate);
+      l.meals.push({
+        id: uid(), foodId: food.id, name, qty: ratio, unitLabel: '100 g',
+        calories: round(kcal * ratio, 1), protein: round(protein * ratio, 1),
+        carbs: round(carbs * ratio, 1), fat: round(fat * ratio, 1),
+        time: new Date().toISOString(),
+      });
+      saveDb();
+      closeSheet();
+      if (state.activeTab === 'today') renderToday();
+      toast('Added ' + name);
+    });
+  }
+
+  document.getElementById('scan-barcode-btn').addEventListener('click', () => openBarcodeScanner());
 
   /* ---------------------------------------------------------------------
    * SUPPLEMENTS TAB

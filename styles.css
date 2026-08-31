@@ -256,6 +256,17 @@ a { color: var(--accent-2); }
 }
 .ai-confidence { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
 
+.scanner-video-wrap {
+  position: relative; width: 100%; aspect-ratio: 3/4; max-height: 50vh;
+  border-radius: 12px; overflow: hidden; background: #000; margin-bottom: 4px;
+}
+.scanner-video-wrap video { width: 100%; height: 100%; object-fit: cover; }
+.scanner-frame {
+  position: absolute; left: 10%; right: 10%; top: 38%; bottom: 38%;
+  border: 2px solid var(--accent); border-radius: 8px;
+  box-shadow: 0 0 0 999px rgba(0,0,0,0.35);
+}
+
 .install-banner {
   display: flex; align-items: center; gap: 10px;
   background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px;
