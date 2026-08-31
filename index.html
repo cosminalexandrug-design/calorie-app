@@ -73,9 +73,13 @@
 
     <div class="section-header">
       <h2>Meals</h2>
-      <button class="btn-add" id="add-food-btn">+ Add food</button>
+      <div class="header-btns">
+        <button class="btn-add btn-add-accent" id="add-photo-btn">📷 Photo</button>
+        <button class="btn-add" id="add-food-btn">+ Add food</button>
+      </div>
     </div>
     <div id="meal-list" class="entry-list"></div>
+    <input type="file" id="photo-input" accept="image/*" capture="environment" hidden>
 
     <div class="section-header">
       <h2>Supplements</h2>
@@ -132,8 +136,30 @@
       <button class="btn-primary full-width" id="save-goals-btn">Save goals</button>
     </div>
     <div class="card">
+      <h2 class="chart-title">AI photo recognition</h2>
+      <p class="muted">Snap a photo of your food and let an AI vision model identify it and estimate calories/macros for you to review before logging. This calls the provider's API directly from your phone using your own API key — nothing passes through any server of ours, and you're billed by the provider per photo (typically a fraction of a cent).</p>
+      <label class="field">Provider
+        <select id="ai-provider">
+          <option value="none">Off (don't use AI photo recognition)</option>
+          <option value="gemini">Google Gemini</option>
+          <option value="claude">Anthropic Claude</option>
+        </select>
+      </label>
+      <div id="ai-gemini-fields">
+        <label class="field">Gemini API key<input type="password" id="ai-gemini-key" placeholder="Paste your Gemini API key" autocomplete="off"></label>
+        <label class="field">Gemini model<input type="text" id="ai-gemini-model" placeholder="gemini-2.5-flash"></label>
+        <p class="muted">Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.</p>
+      </div>
+      <div id="ai-claude-fields">
+        <label class="field">Claude API key<input type="password" id="ai-claude-key" placeholder="Paste your Anthropic API key" autocomplete="off"></label>
+        <label class="field">Claude model<input type="text" id="ai-claude-model" placeholder="claude-haiku-4-5-20251001"></label>
+        <p class="muted">Get a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.</p>
+      </div>
+      <button class="btn-primary full-width" id="save-ai-btn">Save AI settings</button>
+    </div>
+    <div class="card">
       <h2 class="chart-title">Your data</h2>
-      <p class="muted">Everything is stored only on this device. Back up regularly, especially before clearing browser data.</p>
+      <p class="muted">Everything is stored only on this device. Back up regularly, especially before clearing browser data. Backups never include your AI API keys — you'll re-enter those after an import.</p>
       <button class="btn-secondary full-width" id="export-btn">Export backup (.json)</button>
       <label class="btn-secondary full-width file-btn">Import backup (.json)
         <input type="file" id="import-input" accept="application/json" hidden>

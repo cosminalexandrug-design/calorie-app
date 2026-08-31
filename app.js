@@ -9,7 +9,14 @@
   function defaultDb() {
     return {
       version: 1,
-      settings: { calorieGoal: 2200, proteinGoal: 150, carbsGoal: 220, fatGoal: 70 },
+      settings: {
+        calorieGoal: 2200, proteinGoal: 150, carbsGoal: 220, fatGoal: 70,
+        ai: {
+          provider: 'none', // 'none' | 'gemini' | 'claude'
+          gemini: { apiKey: '', model: 'gemini-2.5-flash' },
+          claude: { apiKey: '', model: 'claude-haiku-4-5-20251001' },
+        },
+      },
       foods: [],
       supplements: [],
       logs: {},   // { 'YYYY-MM-DD': { meals: [...], supplements: [...] } }
@@ -17,15 +24,29 @@
     };
   }
 
+  // Merge a (possibly partial / older-shape) parsed object onto a fresh default DB,
+  // so new fields (like AI settings) always exist even for data saved before they did.
+  function normalizeDb(parsed) {
+    parsed = parsed && typeof parsed === 'object' ? parsed : {};
+    const fresh = defaultDb();
+    const merged = Object.assign({}, fresh, parsed);
+    merged.settings = Object.assign({}, fresh.settings, parsed.settings || {});
+    const pAi = (parsed.settings && parsed.settings.ai) || {};
+    merged.settings.ai = Object.assign({}, fresh.settings.ai, pAi);
+    merged.settings.ai.gemini = Object.assign({}, fresh.settings.ai.gemini, pAi.gemini || {});
+    merged.settings.ai.claude = Object.assign({}, fresh.settings.ai.claude, pAi.claude || {});
+    merged.foods = Array.isArray(parsed.foods) ? parsed.foods : fresh.foods;
+    merged.supplements = Array.isArray(parsed.supplements) ? parsed.supplements : fresh.supplements;
+    merged.logs = parsed.logs && typeof parsed.logs === 'object' ? parsed.logs : fresh.logs;
+    merged.weight = Array.isArray(parsed.weight) ? parsed.weight : fresh.weight;
+    return merged;
+  }
+
   function loadDb() {
     try {
       const raw = localStorage.getItem(DB_KEY);
       if (!raw) return defaultDb();
-      const parsed = JSON.parse(raw);
-      const d = defaultDb();
-      return Object.assign(d, parsed, {
-        settings: Object.assign(d.settings, parsed.settings || {}),
-      });
+      return normalizeDb(JSON.parse(raw));
     } catch (e) {
       console.error('Failed to load data, starting fresh', e);
       return defaultDb();
@@ -775,7 +796,22 @@
     document.getElementById('goal-protein').value = db.settings.proteinGoal;
     document.getElementById('goal-carbs').value = db.settings.carbsGoal;
     document.getElementById('goal-fat').value = db.settings.fatGoal;
+
+    const ai = db.settings.ai;
+    document.getElementById('ai-provider').value = ai.provider;
+    document.getElementById('ai-gemini-key').value = ai.gemini.apiKey;
+    document.getElementById('ai-gemini-model').value = ai.gemini.model;
+    document.getElementById('ai-claude-key').value = ai.claude.apiKey;
+    document.getElementById('ai-claude-model').value = ai.claude.model;
+    toggleAiFieldVisibility();
   }
+
+  function toggleAiFieldVisibility() {
+    const provider = document.getElementById('ai-provider').value;
+    document.getElementById('ai-gemini-fields').classList.toggle('hidden', provider !== 'gemini');
+    document.getElementById('ai-claude-fields').classList.toggle('hidden', provider !== 'claude');
+  }
+  document.getElementById('ai-provider').addEventListener('change', toggleAiFieldVisibility);
 
   document.getElementById('save-goals-btn').addEventListener('click', () => {
     db.settings.calorieGoal = parseFloat(document.getElementById('goal-calories').value) || 0;
@@ -786,8 +822,25 @@
     toast('Goals saved');
   });
 
+  document.getElementById('save-ai-btn').addEventListener('click', () => {
+    const ai = db.settings.ai;
+    ai.provider = document.getElementById('ai-provider').value;
+    ai.gemini.apiKey = document.getElementById('ai-gemini-key').value.trim();
+    ai.gemini.model = document.getElementById('ai-gemini-model').value.trim() || 'gemini-2.5-flash';
+    ai.claude.apiKey = document.getElementById('ai-claude-key').value.trim();
+    ai.claude.model = document.getElementById('ai-claude-model').value.trim() || 'claude-haiku-4-5-20251001';
+    saveDb();
+    toast('AI settings saved');
+  });
+
   document.getElementById('export-btn').addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
+    // Never let API keys leave the device in a backup file — strip them from the export.
+    const exportObj = JSON.parse(JSON.stringify(db));
+    if (exportObj.settings && exportObj.settings.ai) {
+      if (exportObj.settings.ai.gemini) exportObj.settings.ai.gemini.apiKey = '';
+      if (exportObj.settings.ai.claude) exportObj.settings.ai.claude.apiKey = '';
+    }
+    const blob = new Blob([JSON.stringify(exportObj, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -807,11 +860,10 @@
         const parsed = JSON.parse(reader.result);
         if (!parsed || typeof parsed !== 'object') throw new Error('bad file');
         if (!confirm('Import will replace all current data on this device. Continue?')) return;
-        const d = defaultDb();
-        db = Object.assign(d, parsed, { settings: Object.assign(d.settings, parsed.settings || {}) });
+        db = normalizeDb(parsed);
         saveDb();
         renderActiveTab();
-        toast('Backup imported');
+        toast('Backup imported — note: API keys are never included in backups, so re-enter them here if you use AI photo recognition.');
       } catch (err) {
         toast('Invalid backup file');
       }
@@ -827,6 +879,260 @@
     saveDb();
     renderActiveTab();
     toast('All data erased');
+  });
+
+  /* ---------------------------------------------------------------------
+   * AI PHOTO RECOGNITION
+   * Calls the configured provider's API directly from the browser using the
+   * user's own API key (never sent anywhere but that provider). No backend.
+   * ------------------------------------------------------------------- */
+  const AI_FOOD_PROMPT = 'You are a nutrition estimation assistant helping someone log food in a personal '
+    + 'calorie tracker. Look at this photo and identify the distinct food/drink item(s) visible. For each '
+    + 'item, estimate a realistic serving size based on what is visible and estimate its nutrition.\n\n'
+    + 'Respond with ONLY raw JSON (no markdown, no code fences, no commentary), exactly matching this shape:\n'
+    + '{"items":[{"name":"short food name","serving":"e.g. 1 bowl (~350g)","calories":number,"protein_g":number,'
+    + '"carbs_g":number,"fat_g":number}],"confidence":"low"|"medium"|"high","notes":"one short sentence on any '
+    + 'uncertainty, or empty string"}\n\n'
+    + 'If you see multiple distinct foods, list each as a separate item. These are rough estimates for personal '
+    + "tracking, not medical or clinical nutrition advice. If the image doesn't clearly show food, return "
+    + '{"items":[],"confidence":"low","notes":"explain what you saw instead"}.';
+
+  function compressImageFile(file) {
+    return new Promise((resolve, reject) => {
+      if (!file.type || file.type.indexOf('image/') !== 0) {
+        reject(new Error('That file is not an image.'));
+        return;
+      }
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Could not read that photo.'));
+      reader.onload = () => {
+        const img = new Image();
+        img.onerror = () => reject(new Error('Could not decode that photo.'));
+        img.onload = () => {
+          const maxDim = 1024;
+          let { width, height } = img;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) { height = Math.round(height * (maxDim / width)); width = maxDim; }
+            else { width = Math.round(width * (maxDim / height)); height = maxDim; }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+          const base64 = dataUrl.split(',')[1];
+          resolve({ base64, mimeType: 'image/jpeg', dataUrl });
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function parseJsonLoose(text) {
+    if (!text) throw new Error('The AI returned an empty response.');
+    let t = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+    try { return JSON.parse(t); } catch (e) { /* fall through */ }
+    const start = t.indexOf('{');
+    const end = t.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      try { return JSON.parse(t.slice(start, end + 1)); } catch (e) { /* fall through */ }
+    }
+    throw new Error("Couldn't understand the AI's response — try again.");
+  }
+
+  function friendlyApiError(status, provider) {
+    if (status === 401 || status === 403) return provider + ' rejected your API key — check it in Settings.';
+    if (status === 429) return provider + " rate limit reached — wait a moment and try again.";
+    if (status >= 500) return provider + "'s servers had an error — try again shortly.";
+    return provider + ' request failed (HTTP ' + status + ').';
+  }
+
+  async function callGeminiVision(base64, mimeType, apiKey, model) {
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/'
+      + encodeURIComponent(model) + ':generateContent?key=' + encodeURIComponent(apiKey);
+    const body = {
+      contents: [{ parts: [
+        { inline_data: { mime_type: mimeType, data: base64 } },
+        { text: AI_FOOD_PROMPT }
+      ] }],
+      generationConfig: { responseMimeType: 'application/json', temperature: 0.2 }
+    };
+    let res;
+    try {
+      res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } catch (e) {
+      throw new Error('Could not reach Gemini — check your internet connection.');
+    }
+    if (!res.ok) throw new Error(friendlyApiError(res.status, 'Gemini'));
+    const data = await res.json();
+    const parts = data && data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts;
+    const text = Array.isArray(parts) ? parts.map((p) => p.text || '').join('') : '';
+    return parseJsonLoose(text);
+  }
+
+  async function callClaudeVision(base64, mimeType, apiKey, model) {
+    let res;
+    try {
+      res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: model,
+          max_tokens: 1024,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
+              { type: 'text', text: AI_FOOD_PROMPT }
+            ]
+          }]
+        })
+      });
+    } catch (e) {
+      throw new Error('Could not reach Claude — check your internet connection.');
+    }
+    if (!res.ok) throw new Error(friendlyApiError(res.status, 'Claude'));
+    const data = await res.json();
+    const text = Array.isArray(data.content) ? data.content.map((b) => b.text || '').join('') : '';
+    return parseJsonLoose(text);
+  }
+
+  async function recognizeFoodPhoto(base64, mimeType) {
+    const ai = db.settings.ai;
+    if (ai.provider === 'gemini') {
+      if (!ai.gemini.apiKey) throw new Error('Add your Gemini API key in Settings first.');
+      return callGeminiVision(base64, mimeType, ai.gemini.apiKey, ai.gemini.model || 'gemini-2.5-flash');
+    }
+    if (ai.provider === 'claude') {
+      if (!ai.claude.apiKey) throw new Error('Add your Claude API key in Settings first.');
+      return callClaudeVision(base64, mimeType, ai.claude.apiKey, ai.claude.model || 'claude-haiku-4-5-20251001');
+    }
+    throw new Error('Turn on AI photo recognition in Settings first.');
+  }
+
+  function renderAiResults(result, dataUrl) {
+    const items = Array.isArray(result && result.items) ? result.items : [];
+    if (items.length === 0) {
+      sheetContent.innerHTML = `
+        <h3>Photo</h3>
+        <div class="photo-preview-wrap"><img src="${dataUrl}" alt="Food photo"></div>
+        <div class="empty-msg">${escapeHtml((result && result.notes) || "Couldn't identify any food in that photo.")}</div>
+        <button class="btn-secondary full-width" id="ai-close-btn">Close</button>
+      `;
+      document.getElementById('ai-close-btn').addEventListener('click', closeSheet);
+      return;
+    }
+    const rowsHtml = items.map((it, i) => `
+      <div class="ai-result-item">
+        <div class="ai-row-top">
+          <input type="checkbox" data-ai-include="${i}" checked>
+          <input type="text" data-ai-name="${i}" value="${escapeHtml(it.name || 'Food')}">
+        </div>
+        <div class="muted" style="margin-bottom:8px;font-size:12px;">${escapeHtml(it.serving || '')}</div>
+        <div class="ai-macro-inputs">
+          <label>Cal<input type="number" min="0" data-ai-cal="${i}" value="${round(it.calories || 0)}"></label>
+          <label>Protein<input type="number" min="0" step="0.1" data-ai-protein="${i}" value="${round(it.protein_g || 0, 1)}"></label>
+          <label>Carbs<input type="number" min="0" step="0.1" data-ai-carbs="${i}" value="${round(it.carbs_g || 0, 1)}"></label>
+          <label>Fat<input type="number" min="0" step="0.1" data-ai-fat="${i}" value="${round(it.fat_g || 0, 1)}"></label>
+        </div>
+      </div>
+    `).join('');
+    sheetContent.innerHTML = `
+      <h3>Review &amp; add</h3>
+      <div class="photo-preview-wrap"><img src="${dataUrl}" alt="Food photo"></div>
+      ${result.confidence ? `<div class="ai-confidence">AI confidence: ${escapeHtml(result.confidence)}${result.notes ? ' — ' + escapeHtml(result.notes) : ''}</div>` : ''}
+      <div id="ai-results-list" style="margin-top:10px;">${rowsHtml}</div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);margin:10px 0;">
+        <input type="checkbox" id="ai-save-library" checked> Also save these to your food library
+      </label>
+      <button class="btn-primary full-width" id="ai-add-btn">Add checked items to today</button>
+    `;
+    document.getElementById('ai-add-btn').addEventListener('click', () => {
+      const saveToLibrary = document.getElementById('ai-save-library').checked;
+      const list = document.getElementById('ai-results-list');
+      let addedCount = 0;
+      items.forEach((_, i) => {
+        const include = list.querySelector(`[data-ai-include="${i}"]`).checked;
+        if (!include) return;
+        const name = list.querySelector(`[data-ai-name="${i}"]`).value.trim() || 'Food';
+        const calories = parseFloat(list.querySelector(`[data-ai-cal="${i}"]`).value) || 0;
+        const protein = parseFloat(list.querySelector(`[data-ai-protein="${i}"]`).value) || 0;
+        const carbs = parseFloat(list.querySelector(`[data-ai-carbs="${i}"]`).value) || 0;
+        const fat = parseFloat(list.querySelector(`[data-ai-fat="${i}"]`).value) || 0;
+        const servingLabel = (items[i] && items[i].serving) || '1 serving (AI estimate)';
+
+        if (saveToLibrary) {
+          db.foods.push({ id: uid(), name, servingLabel, calories, protein, carbs, fat, source: 'ai-photo' });
+        }
+        const l = getLog(state.currentDate);
+        l.meals.push({
+          id: uid(), foodId: null, name, qty: 1, unitLabel: servingLabel,
+          calories: round(calories, 1), protein: round(protein, 1), carbs: round(carbs, 1), fat: round(fat, 1),
+          time: new Date().toISOString(),
+        });
+        addedCount++;
+      });
+      saveDb();
+      closeSheet();
+      if (state.activeTab === 'today') renderToday();
+      if (state.activeTab === 'foods') renderFoods();
+      toast(addedCount > 0 ? 'Added ' + addedCount + ' item(s)' : 'Nothing selected');
+    });
+  }
+
+  async function openPhotoReviewSheet(file) {
+    openSheet(`
+      <h3>Photo</h3>
+      <div class="ai-spinner-row"><span class="spinner"></span> Preparing photo…</div>
+    `);
+    let compressed;
+    try {
+      compressed = await compressImageFile(file);
+    } catch (err) {
+      sheetContent.innerHTML = `<h3>Photo</h3><div class="empty-msg">${escapeHtml(err.message)}</div>`;
+      return;
+    }
+    sheetContent.innerHTML = `
+      <h3>Photo</h3>
+      <div class="photo-preview-wrap"><img src="${compressed.dataUrl}" alt="Food photo"></div>
+      <div class="ai-spinner-row"><span class="spinner"></span> Analyzing photo…</div>
+    `;
+    try {
+      const result = await recognizeFoodPhoto(compressed.base64, compressed.mimeType);
+      renderAiResults(result, compressed.dataUrl);
+    } catch (err) {
+      console.error(err);
+      sheetContent.innerHTML = `
+        <h3>Photo</h3>
+        <div class="photo-preview-wrap"><img src="${compressed.dataUrl}" alt="Food photo"></div>
+        <div class="empty-msg">${escapeHtml(err.message || 'Something went wrong analyzing the photo.')}</div>
+        <button class="btn-secondary full-width" id="ai-retry-btn">Try again</button>
+      `;
+      document.getElementById('ai-retry-btn').addEventListener('click', () => openPhotoReviewSheet(file));
+    }
+  }
+
+  document.getElementById('add-photo-btn').addEventListener('click', () => {
+    const ai = db.settings.ai;
+    const key = ai.provider === 'gemini' ? ai.gemini.apiKey : ai.provider === 'claude' ? ai.claude.apiKey : '';
+    if (ai.provider === 'none' || !key) {
+      toast('Set up AI photo recognition in Settings first');
+      switchTab('settings');
+      return;
+    }
+    document.getElementById('photo-input').click();
+  });
+
+  document.getElementById('photo-input').addEventListener('change', (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (file) openPhotoReviewSheet(file);
   });
 
   /* ---------------------------------------------------------------------

@@ -223,6 +223,39 @@ a { color: var(--accent-2); }
 .quick-add-item .qa-sub { font-size: 12px; color: var(--muted); }
 .quick-add-item button { background: var(--accent); color: #06231f; border: none; border-radius: 8px; padding: 7px 12px; font-weight: 700; font-size: 13px; flex: none; }
 
+.header-btns { display: flex; gap: 8px; }
+.btn-add-accent { background: var(--accent); color: #06231f; border-color: transparent; }
+
+#ai-gemini-fields.hidden, #ai-claude-fields.hidden { display: none; }
+
+.photo-preview-wrap { text-align: center; margin-bottom: 14px; }
+.photo-preview-wrap img { max-width: 100%; max-height: 220px; border-radius: 12px; border: 1px solid var(--border); }
+
+.ai-spinner-row { display: flex; align-items: center; gap: 10px; justify-content: center; padding: 18px 0; color: var(--muted); font-size: 14px; }
+.spinner {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2.5px solid var(--border); border-top-color: var(--accent);
+  animation: spin .8s linear infinite; flex: none;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.ai-result-item {
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px; margin-bottom: 10px;
+}
+.ai-result-item .ai-row-top { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ai-result-item .ai-row-top input[type="text"] {
+  flex: 1; background: var(--surface); border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 8px 10px; font-size: 14px; font-weight: 600;
+}
+.ai-macro-inputs { display: flex; gap: 6px; }
+.ai-macro-inputs label { flex: 1; display: flex; flex-direction: column; gap: 3px; font-size: 10.5px; color: var(--muted); }
+.ai-macro-inputs input {
+  background: var(--surface); border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 7px 6px; font-size: 13px; width: 100%;
+}
+.ai-confidence { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+
 .install-banner {
   display: flex; align-items: center; gap: 10px;
   background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px;
