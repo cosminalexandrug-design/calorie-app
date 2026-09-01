@@ -6,6 +6,26 @@
    * ------------------------------------------------------------------- */
   const DB_KEY = 'calorieTrackerData';
 
+  const MEAL_TYPES = [
+    { key: 'breakfast', label: 'Breakfast' },
+    { key: 'lunch', label: 'Lunch' },
+    { key: 'dinner', label: 'Dinner' },
+    { key: 'snacks', label: 'Snacks' },
+  ];
+  const VALID_MEAL_TYPES = MEAL_TYPES.map((m) => m.key);
+  function mealLabel(key) {
+    const m = MEAL_TYPES.find((x) => x.key === key);
+    return m ? m.label : 'Snacks';
+  }
+  // Best-effort default for "which meal is this" pickers, based on time of day.
+  function guessMealType() {
+    const h = new Date().getHours();
+    if (h < 11) return 'breakfast';
+    if (h < 16) return 'lunch';
+    if (h < 21) return 'dinner';
+    return 'snacks';
+  }
+
   function defaultDb() {
     return {
       version: 1,
@@ -39,6 +59,18 @@
     merged.supplements = Array.isArray(parsed.supplements) ? parsed.supplements : fresh.supplements;
     merged.logs = parsed.logs && typeof parsed.logs === 'object' ? parsed.logs : fresh.logs;
     merged.weight = Array.isArray(parsed.weight) ? parsed.weight : fresh.weight;
+
+    // Migration: meals logged before meal sections existed (or from an older backup)
+    // have no mealType — file them under Snacks rather than losing them.
+    Object.keys(merged.logs).forEach((d) => {
+      const day = merged.logs[d];
+      if (day && Array.isArray(day.meals)) {
+        day.meals.forEach((m) => {
+          if (!m.mealType || VALID_MEAL_TYPES.indexOf(m.mealType) === -1) m.mealType = 'snacks';
+        });
+      }
+    });
+
     return merged;
   }
 
@@ -259,7 +291,7 @@
     setMacroBar('carbs', totals.carbs, s.carbsGoal);
     setMacroBar('fat', totals.fat, s.fatGoal);
 
-    renderMealList();
+    renderMealSections();
     renderSuppLogList();
   }
 
@@ -274,30 +306,35 @@
     document.getElementById(key + '-bar').style.width = pct + '%';
   }
 
-  function renderMealList() {
+  function renderMealSections() {
     const log = peekLog(state.currentDate);
-    const list = document.getElementById('meal-list');
-    if (!log.meals || log.meals.length === 0) {
-      list.innerHTML = '<div class="empty-msg">No meals logged yet.</div>';
-      return;
-    }
-    list.innerHTML = log.meals.map((m) => `
-      <div class="entry" data-id="${m.id}">
-        <div class="entry-main">
-          <div class="entry-title">${escapeHtml(m.name)}</div>
-          <div class="entry-sub">${round(m.qty, 2)} × ${escapeHtml(m.unitLabel)} · P${round(m.protein)} C${round(m.carbs)} F${round(m.fat)}</div>
+    const allMeals = log.meals || [];
+    MEAL_TYPES.forEach((mt) => {
+      const list = document.querySelector('[data-meal-list="' + mt.key + '"]');
+      if (!list) return;
+      const items = allMeals.filter((m) => (m.mealType || 'snacks') === mt.key);
+      if (items.length === 0) {
+        list.innerHTML = '<div class="empty-msg">Nothing logged yet.</div>';
+        return;
+      }
+      list.innerHTML = items.map((m) => `
+        <div class="entry" data-id="${m.id}">
+          <div class="entry-main">
+            <div class="entry-title">${escapeHtml(m.name)}</div>
+            <div class="entry-sub">${round(m.qty, 2)} × ${escapeHtml(m.unitLabel)} · P${round(m.protein)} C${round(m.carbs)} F${round(m.fat)}</div>
+          </div>
+          <div class="entry-cals">${round(m.calories)}</div>
+          <button class="entry-remove" data-remove-meal="${m.id}" aria-label="Remove">×</button>
         </div>
-        <div class="entry-cals">${round(m.calories)}</div>
-        <button class="entry-remove" data-remove-meal="${m.id}" aria-label="Remove">×</button>
-      </div>
-    `).join('');
-    list.querySelectorAll('[data-remove-meal]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const id = btn.dataset.removeMeal;
-        const l = getLog(state.currentDate);
-        l.meals = l.meals.filter((m) => m.id !== id);
-        saveDb();
-        renderToday();
+      `).join('');
+      list.querySelectorAll('[data-remove-meal]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const id = btn.dataset.removeMeal;
+          const l = getLog(state.currentDate);
+          l.meals = l.meals.filter((mm) => mm.id !== id);
+          saveDb();
+          renderToday();
+        });
       });
     });
   }
@@ -329,22 +366,75 @@
     });
   }
 
-  /* ---- Add food to today's log ---- */
-  document.getElementById('add-food-btn').addEventListener('click', () => openAddFoodSheet());
+  /* ---- Add food to a specific meal (Breakfast/Lunch/Dinner/Snacks) ---- */
+  document.querySelectorAll('[data-add-meal]').forEach((btn) => {
+    btn.addEventListener('click', () => openAddFoodSheet(btn.dataset.addMeal));
+  });
 
-  function openAddFoodSheet() {
+  function openAddFoodSheet(mealType) {
+    const label = mealLabel(mealType);
     openSheet(`
-      <h3>Add food</h3>
-      <input type="search" id="qa-filter" placeholder="Filter your library…" class="qa-filter-input" style="width:100%;margin-bottom:12px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:11px 12px;font-size:15px;">
+      <h3>Add to ${escapeHtml(label)}</h3>
+      <div class="search-bar">
+        <input type="search" id="qa-off-search-input" placeholder="Search Open Food Facts…" autofocus>
+        <button id="qa-off-search-btn">Search</button>
+      </div>
+      <div id="qa-off-status" class="muted"></div>
+      <div class="quick-add-list" id="qa-off-results"></div>
+
+      <div class="sheet-divider">your saved foods</div>
+      <input type="search" id="qa-filter" placeholder="Filter your saved foods…" class="qa-filter-input" style="width:100%;margin-bottom:12px;background:var(--surface-2);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:11px 12px;font-size:15px;">
       <div class="quick-add-list" id="qa-food-list"></div>
-      <button class="btn-secondary full-width" id="qa-goto-foods" style="margin-top:12px;">Manage / search more foods →</button>
+      <button class="btn-secondary full-width" id="qa-goto-foods" style="margin-top:12px;">Manage food library / scan barcode →</button>
     `);
+
+    // --- Primary: search Open Food Facts directly ---
+    const offInput = document.getElementById('qa-off-search-input');
+    const offStatus = document.getElementById('qa-off-status');
+    const offResults = document.getElementById('qa-off-results');
+    function runOffSearch() {
+      const q = offInput.value.trim();
+      if (!q) return;
+      offStatus.textContent = 'Searching…';
+      offResults.innerHTML = '';
+      searchOffProducts(q).then(({ products, scoped }) => {
+        if (products.length === 0) { offStatus.textContent = 'No results found.'; return; }
+        offStatus.textContent = products.length + ' result(s)' + (scoped ? ' available in Romania' : '');
+        renderOffResults(offResults, products, (p, qty) => {
+          const food = buildFoodFromOffProduct(p);
+          db.foods.push(food);
+          const l = getLog(state.currentDate);
+          l.meals.push({
+            id: uid(), foodId: food.id, name: food.name, qty: qty, mealType,
+            unitLabel: '100 g',
+            calories: round(food.calories * qty, 1),
+            protein: round(food.protein * qty, 1),
+            carbs: round(food.carbs * qty, 1),
+            fat: round(food.fat * qty, 1),
+            time: new Date().toISOString(),
+          });
+          saveDb();
+          closeSheet();
+          renderToday();
+          toast('Added ' + food.name + ' to ' + label);
+        }, { withQty: true });
+      }).catch(() => {
+        offStatus.textContent = 'Search failed — check your internet connection.';
+      });
+    }
+    document.getElementById('qa-off-search-btn').addEventListener('click', runOffSearch);
+    offInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runOffSearch(); });
+    offInput.focus();
+
+    // --- Secondary: quick re-add from foods you've already saved ---
     const listEl = document.getElementById('qa-food-list');
     function renderList(filter) {
       const f = (filter || '').toLowerCase();
       const items = db.foods.filter((food) => food.name.toLowerCase().includes(f));
       if (items.length === 0) {
-        listEl.innerHTML = '<div class="empty-msg">No foods in your library yet. Use "Manage / search more foods" to add some.</div>';
+        listEl.innerHTML = '<div class="empty-msg">'
+          + (db.foods.length === 0 ? 'Nothing saved yet — search above to find and add foods.' : 'No matches.')
+          + '</div>';
         return;
       }
       listEl.innerHTML = items.map((food) => `
@@ -365,7 +455,7 @@
           const qty = parseFloat(qtyInput.value) || 1;
           const l = getLog(state.currentDate);
           l.meals.push({
-            id: uid(), foodId: food.id, name: food.name, qty,
+            id: uid(), foodId: food.id, name: food.name, qty, mealType,
             unitLabel: food.servingLabel,
             calories: round(food.calories * qty, 1),
             protein: round(food.protein * qty, 1),
@@ -376,7 +466,7 @@
           saveDb();
           closeSheet();
           renderToday();
-          toast('Added ' + food.name);
+          toast('Added ' + food.name + ' to ' + label);
         });
       });
     }
@@ -520,76 +610,99 @@
     }));
   }
 
-  function searchFoodDb(query) {
-    const statusEl = document.getElementById('food-search-status');
-    const resultsEl = document.getElementById('food-search-results');
-    statusEl.textContent = 'Searching…';
-    resultsEl.innerHTML = '';
-
-    // First try scoped to products tagged as sold in Romania; if that comes up empty
-    // (Open Food Facts' Romanian coverage is patchy for some items), fall back to a
-    // global search and just sort/badge the Romania-tagged ones to the top instead.
+  // First try scoped to products tagged as sold in Romania; if that comes up empty
+  // (Open Food Facts' Romanian coverage is patchy for some items), fall back to a
+  // global search and just sort/badge the Romania-tagged ones to the top instead.
+  function searchOffProducts(query) {
     const roUrl = offSearchUrl(query, '&tagtype_0=countries&tag_contains_0=contains&tag_0=romania');
-    fetchOffSearch(roUrl)
+    return fetchOffSearch(roUrl)
       .catch(() => [])
       .then((roProducts) => {
         if (roProducts.length > 0) return { products: roProducts, scoped: true };
         return fetchOffSearch(offSearchUrl(query)).then((products) => ({ products, scoped: false }));
       })
       .then(({ products, scoped }) => {
-        if (products.length === 0) {
-          statusEl.textContent = 'No results found.';
-          return;
-        }
         if (!scoped) {
           products = products.slice().sort((a, b) => (isRomaniaProduct(b) ? 1 : 0) - (isRomaniaProduct(a) ? 1 : 0));
         }
-        statusEl.textContent = products.length + ' result(s)'
-          + (scoped ? ' available in Romania' : ' — 🇷🇴 marks ones tagged as sold in Romania')
-          + ' — tap + to save to your library';
-        resultsEl.innerHTML = products.slice(0, 24).map((p, idx) => {
-          const n = p.nutriments || {};
-          const kcal = round(n['energy-kcal_100g'] || 0);
-          const protein = round(n['proteins_100g'] || 0, 1);
-          const carbs = round(n['carbohydrates_100g'] || 0, 1);
-          const fat = round(n['fat_100g'] || 0, 1);
-          const brand = p.brands ? ' · ' + p.brands.split(',')[0] : '';
-          const roBadge = isRomaniaProduct(p) ? ' 🇷🇴' : '';
-          return `
-            <div class="quick-add-item">
-              <div class="qa-main">
-                <div class="qa-title">${escapeHtml(p.product_name)}${escapeHtml(brand)}${roBadge}</div>
-                <div class="qa-sub">${kcal} kcal · P${protein} C${carbs} F${fat} per 100g</div>
-              </div>
-              <button data-off-idx="${idx}">+</button>
-            </div>`;
-        }).join('');
-        resultsEl.querySelectorAll('[data-off-idx]').forEach((btn) => {
-          btn.addEventListener('click', () => {
-            const p = products[btn.dataset.offIdx];
-            const n = p.nutriments || {};
-            const food = {
-              id: uid(),
-              name: p.product_name + (p.brands ? ' (' + p.brands.split(',')[0] + ')' : ''),
-              servingLabel: '100 g',
-              calories: round(n['energy-kcal_100g'] || 0),
-              protein: round(n['proteins_100g'] || 0, 1),
-              carbs: round(n['carbohydrates_100g'] || 0, 1),
-              fat: round(n['fat_100g'] || 0, 1),
-              source: 'openfoodfacts',
-              barcode: p.code || null,
-            };
-            db.foods.push(food);
-            saveDb();
-            toast('Saved to library');
-            renderFoods();
-          });
-        });
-      })
-      .catch((e) => {
-        console.error('searchFoodDb error', e);
-        statusEl.textContent = 'Search failed — check your internet connection.';
+        return { products, scoped };
       });
+  }
+
+  function buildFoodFromOffProduct(p) {
+    const n = p.nutriments || {};
+    return {
+      id: uid(),
+      name: p.product_name + (p.brands ? ' (' + p.brands.split(',')[0] + ')' : ''),
+      servingLabel: '100 g',
+      calories: round(n['energy-kcal_100g'] || 0),
+      protein: round(n['proteins_100g'] || 0, 1),
+      carbs: round(n['carbohydrates_100g'] || 0, 1),
+      fat: round(n['fat_100g'] || 0, 1),
+      source: 'openfoodfacts',
+      barcode: p.code || null,
+    };
+  }
+
+  // Renders OFF search results into `container`; calls onAdd(product, qty) when the
+  // + button for a result is tapped. Pass opts.withQty to show a quantity (x100g) input.
+  function renderOffResults(container, products, onAdd, opts) {
+    opts = opts || {};
+    container.innerHTML = products.slice(0, 24).map((p, idx) => {
+      const n = p.nutriments || {};
+      const kcal = round(n['energy-kcal_100g'] || 0);
+      const protein = round(n['proteins_100g'] || 0, 1);
+      const carbs = round(n['carbohydrates_100g'] || 0, 1);
+      const fat = round(n['fat_100g'] || 0, 1);
+      const brand = p.brands ? ' · ' + p.brands.split(',')[0] : '';
+      const roBadge = isRomaniaProduct(p) ? ' 🇷🇴' : '';
+      return `
+        <div class="quick-add-item">
+          <div class="qa-main">
+            <div class="qa-title">${escapeHtml(p.product_name)}${escapeHtml(brand)}${roBadge}</div>
+            <div class="qa-sub">${kcal} kcal · P${protein} C${carbs} F${fat} per 100g</div>
+          </div>
+          ${opts.withQty ? `<input type="number" min="0" step="0.25" value="1" style="width:52px;text-align:center;background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px;" data-off-qty="${idx}">` : ''}
+          <button data-off-idx="${idx}">+</button>
+        </div>`;
+    }).join('');
+    container.querySelectorAll('[data-off-idx]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const idx = btn.dataset.offIdx;
+        const p = products[idx];
+        let qty = 1;
+        if (opts.withQty) {
+          const qtyInput = container.querySelector('[data-off-qty="' + idx + '"]');
+          qty = parseFloat(qtyInput.value) || 1;
+        }
+        onAdd(p, qty);
+      });
+    });
+  }
+
+  function searchFoodDb(query) {
+    const statusEl = document.getElementById('food-search-status');
+    const resultsEl = document.getElementById('food-search-results');
+    statusEl.textContent = 'Searching…';
+    resultsEl.innerHTML = '';
+    searchOffProducts(query).then(({ products, scoped }) => {
+      if (products.length === 0) {
+        statusEl.textContent = 'No results found.';
+        return;
+      }
+      statusEl.textContent = products.length + ' result(s)'
+        + (scoped ? ' available in Romania' : ' — 🇷🇴 marks ones tagged as sold in Romania')
+        + ' — tap + to save to your library';
+      renderOffResults(resultsEl, products, (p) => {
+        db.foods.push(buildFoodFromOffProduct(p));
+        saveDb();
+        toast('Saved to library');
+        renderFoods();
+      });
+    }).catch((e) => {
+      console.error('searchFoodDb error', e);
+      statusEl.textContent = 'Search failed — check your internet connection.';
+    });
   }
 
   document.getElementById('food-search-btn').addEventListener('click', () => {
@@ -752,6 +865,11 @@
           <div class="qa-sub">${kcal} kcal · P${protein} C${carbs} F${fat} per 100g</div>
         </div>
       </div>
+      <label class="field">Add to meal
+        <select id="barcode-meal-select">
+          ${MEAL_TYPES.map((m) => `<option value="${m.key}"${m.key === guessMealType() ? ' selected' : ''}>${m.label}</option>`).join('')}
+        </select>
+      </label>
       <label class="field">Grams eaten<input type="number" id="barcode-grams" min="1" step="1" value="100"></label>
       <button class="btn-primary full-width" id="barcode-save-btn">Save to library &amp; add to today</button>
       <button class="btn-secondary full-width" id="barcode-save-only-btn">Just save to library</button>
@@ -768,12 +886,13 @@
     });
     document.getElementById('barcode-save-btn').addEventListener('click', () => {
       const grams = parseFloat(document.getElementById('barcode-grams').value) || 100;
+      const mealType = document.getElementById('barcode-meal-select').value;
       const ratio = grams / 100;
       const food = buildFood();
       db.foods.push(food);
       const l = getLog(state.currentDate);
       l.meals.push({
-        id: uid(), foodId: food.id, name, qty: ratio, unitLabel: '100 g',
+        id: uid(), foodId: food.id, name, qty: ratio, unitLabel: '100 g', mealType,
         calories: round(kcal * ratio, 1), protein: round(protein * ratio, 1),
         carbs: round(carbs * ratio, 1), fat: round(fat * ratio, 1),
         time: new Date().toISOString(),
@@ -1264,7 +1383,12 @@
       <h3>Review &amp; add</h3>
       <div class="photo-preview-wrap"><img src="${dataUrl}" alt="Food photo"></div>
       ${result.confidence ? `<div class="ai-confidence">AI confidence: ${escapeHtml(result.confidence)}${result.notes ? ' — ' + escapeHtml(result.notes) : ''}</div>` : ''}
-      <div id="ai-results-list" style="margin-top:10px;">${rowsHtml}</div>
+      <label class="field" style="margin-top:10px;">Add to meal
+        <select id="ai-meal-select">
+          ${MEAL_TYPES.map((m) => `<option value="${m.key}"${m.key === guessMealType() ? ' selected' : ''}>${m.label}</option>`).join('')}
+        </select>
+      </label>
+      <div id="ai-results-list" style="margin-top:6px;">${rowsHtml}</div>
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);margin:10px 0;">
         <input type="checkbox" id="ai-save-library" checked> Also save these to your food library
       </label>
@@ -1272,6 +1396,7 @@
     `;
     document.getElementById('ai-add-btn').addEventListener('click', () => {
       const saveToLibrary = document.getElementById('ai-save-library').checked;
+      const mealType = document.getElementById('ai-meal-select').value;
       const list = document.getElementById('ai-results-list');
       let addedCount = 0;
       items.forEach((_, i) => {
@@ -1289,7 +1414,7 @@
         }
         const l = getLog(state.currentDate);
         l.meals.push({
-          id: uid(), foodId: null, name, qty: 1, unitLabel: servingLabel,
+          id: uid(), foodId: null, name, qty: 1, unitLabel: servingLabel, mealType,
           calories: round(calories, 1), protein: round(protein, 1), carbs: round(carbs, 1), fat: round(fat, 1),
           time: new Date().toISOString(),
         });

@@ -71,15 +71,43 @@
       </div>
     </div>
 
-    <div class="section-header">
+    <div class="section-header no-gap">
       <h2>Meals</h2>
-      <div class="header-btns">
-        <button class="btn-add btn-add-accent" id="add-photo-btn">📷 Photo</button>
-        <button class="btn-add" id="add-food-btn">+ Add food</button>
-      </div>
+      <button class="btn-add btn-add-accent" id="add-photo-btn">📷 Add via photo</button>
     </div>
-    <div id="meal-list" class="entry-list"></div>
     <input type="file" id="photo-input" accept="image/*" capture="environment" hidden>
+
+    <div class="meal-section" data-meal="breakfast">
+      <div class="section-header">
+        <h3 class="meal-heading">Breakfast</h3>
+        <button class="btn-add" data-add-meal="breakfast">+ Add</button>
+      </div>
+      <div class="entry-list" data-meal-list="breakfast"></div>
+    </div>
+
+    <div class="meal-section" data-meal="lunch">
+      <div class="section-header">
+        <h3 class="meal-heading">Lunch</h3>
+        <button class="btn-add" data-add-meal="lunch">+ Add</button>
+      </div>
+      <div class="entry-list" data-meal-list="lunch"></div>
+    </div>
+
+    <div class="meal-section" data-meal="dinner">
+      <div class="section-header">
+        <h3 class="meal-heading">Dinner</h3>
+        <button class="btn-add" data-add-meal="dinner">+ Add</button>
+      </div>
+      <div class="entry-list" data-meal-list="dinner"></div>
+    </div>
+
+    <div class="meal-section" data-meal="snacks">
+      <div class="section-header">
+        <h3 class="meal-heading">Snacks</h3>
+        <button class="btn-add" data-add-meal="snacks">+ Add</button>
+      </div>
+      <div class="entry-list" data-meal-list="snacks"></div>
+    </div>
 
     <div class="section-header">
       <h2>Supplements</h2>

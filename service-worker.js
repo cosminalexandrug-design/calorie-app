@@ -1,5 +1,5 @@
 // Bump this on every deploy that changes cached files, so clients pick up the update.
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v5';
 const CACHE_NAME = `calorie-tracker-${CACHE_VERSION}`;
 
 const APP_SHELL = [
